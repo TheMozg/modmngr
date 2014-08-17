@@ -29,7 +29,7 @@ private:
 	void refreshOnDrop();
 	void syncModOrder();
 	void applyChanges();
-	void exportToModel();
+	bool exportToModel();
 	void syncSelection(QModelIndex index);
 	QList<ModInfo> m_modList;
 	QDir *modsDir;

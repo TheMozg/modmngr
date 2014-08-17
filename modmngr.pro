@@ -15,7 +15,8 @@ SOURCES += \
     wizardpage.cpp \
     nexusinterface.cpp \
     pluginmanager.cpp \
-    modmanager.cpp
+    modmanager.cpp \
+    bashimportwizardpage.cpp
 
 HEADERS += \
     mainwindow.h \
@@ -25,11 +26,13 @@ HEADERS += \
     modInfo.h \
     nexusinterface.h \
     pluginmanager.h \
-    modmanager.h
+    modmanager.h \
+    bashimportwizardpage.h
 
 FORMS += \
     mainwindow.ui \
-    wizardpage.ui
+    wizardpage.ui \
+    bashimportwizardpage.ui
 
 RESOURCES += \
     resources.qrc \

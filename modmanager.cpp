@@ -1,4 +1,5 @@
 #include "modmanager.h"
+#include "bashimportwizardpage.h"
 
 ModManager::ModManager(QObject *parent) :QObject(parent)
 {
@@ -27,7 +28,54 @@ void ModManager::setPaths(QString skyrimPath, QString modsPath)
 	if(QFile::exists(modsPath))
 		modsDir->setPath(modsPath);
 	if(oldMP != modsDir->path())
+	{
 		reload();
+
+		disconnect(modFilter, &SortFilterProxyModel::dataChanged, this, &ModManager::refreshOnCheck);
+		disconnect(modFilter, &SortFilterProxyModel::rowsInserted, this, &ModManager::refreshOnDrop);
+		if(modsDir->dirName().toLower() == "bash installers")
+		{
+			bool ok = exportToModel();
+			if(!ok)
+			{
+				QWizard *wiz = new QWizard(qApp->activeWindow(),Qt::WindowCloseButtonHint|Qt::CustomizeWindowHint);
+				wiz->setWindowTitle("SMM Setup");
+				BashImportWizardPage *importPage = new BashImportWizardPage();
+				importPage->setTitle("It seems you are using Wrye Bash to manage mods");
+				importPage->setSubTitle("SMM thinks you have made some changes in Wrye Bash that are are not yet synced with SMM. If you want to import Wrye Bash mod order, open installers tab, right click on column header and select list packages (both installed and uninstalled), then copy and paste it here.");
+				wiz->addPage(importPage);
+				wiz->exec();
+				if(wiz->result() == QDialog::Accepted)
+				{
+					QList<QPair<QString, bool>> installed = importPage->installed;
+					qDebug() << installed.count();
+					QMutableListIterator<QPair<QString, bool>> i(installed);
+					while (i.hasNext())
+					{
+						if(indexFromArchiveName(i.next().first) == -1)
+							i.remove();
+					}
+
+					qDebug() << installed.count() << m_modList.count();
+					qDebug() << installed;
+					for(int modRow = 0; modRow < installed.count(); modRow++)
+					{
+						int oldModRow = indexFromArchiveName(installed.at(modRow).first);
+						qDebug() << oldModRow << installed.at(modRow).first;
+						ModInfo &modInfo = m_modList[oldModRow];
+						for(SubmodInfo &submodInfo: modInfo.submodList)
+						{
+							submodInfo.isChecked = installed.at(modRow).second;
+						}
+						m_modList.move(oldModRow, modRow);
+					}
+				}
+			}
+		}
+		connect(modFilter, &SortFilterProxyModel::dataChanged, this, &ModManager::refreshOnCheck);
+		connect(modFilter, &SortFilterProxyModel::rowsInserted, this, &ModManager::refreshOnDrop, Qt::QueuedConnection);
+		refreshOnCheck(QModelIndex(), QModelIndex());
+	}
 	if(oldSP != dataDir->path() && oldMP == modsDir->path())
 		refreshOnCheck(QModelIndex(), QModelIndex());
 }
@@ -123,9 +171,9 @@ void ModManager::reload()
 		m_modList.append(modInfo);
 	}
 	qDebug() <<"loading time" << t.elapsed();
+
 	connect(modFilter, &SortFilterProxyModel::dataChanged, this, &ModManager::refreshOnCheck);
 	connect(modFilter, &SortFilterProxyModel::rowsInserted, this, &ModManager::refreshOnDrop, Qt::QueuedConnection);
-	refreshOnCheck(QModelIndex(), QModelIndex());
 }
 
 QList<QStandardItem *> ModManager::createFileItems(FileInfo fileInfo)
@@ -423,7 +471,7 @@ void ModManager::replyFinished(QHash<QString, NexusModInfo> nexusModInfoIDHash)
 	}*/
 }
 
-void ModManager::exportToModel()
+bool ModManager::exportToModel()
 {
 	QTime t(0,0);
 	t.start();
@@ -450,6 +498,7 @@ void ModManager::exportToModel()
 		}
 	}
 	//qDebug() << installList;
+	bool ok = true;
 	QStringList tagList;
 	tagList << "Matched" << "Matched Conflict" << "Conflict" << "Mismatched" << "Underwritten" << "Dirty" << "Missing";
 	QList<QBrush> colorList;
@@ -655,6 +704,9 @@ void ModManager::exportToModel()
 			modItem->setCheckState(Qt::PartiallyChecked);
 		if(ci != -1)
 		{
+			qDebug() << ci;
+			if(ci >= 3)
+				ok = false;
 			for(QStandardItem *item: modItemList)
 				item->setBackground(colorList.at(ci));
 		}
@@ -662,6 +714,7 @@ void ModManager::exportToModel()
 	}
 	qDebug() << "export time" << t.elapsed();
 	emit finishedExporting();
+	return ok;
 }
 
 void ModManager::syncSelection(QModelIndex index)

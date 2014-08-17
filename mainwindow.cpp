@@ -123,6 +123,7 @@ void MainWindow::on_actionChangeMods_triggered()
 	wiz->exec();
 	if(wiz->result() == 1)
 	{
+		QFile::remove(QDir::current().filePath("modlist.txt"));
 		modsPath = wiz->field("mod").toString();
 		modManager->setPaths(skyrimPath, modsPath);
 		pluginManager->setSkyrimPath(skyrimPath);
