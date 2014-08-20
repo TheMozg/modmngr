@@ -28,15 +28,18 @@ public:
 private:
 	void refreshOnDrop();
 	void syncModOrder();
+	QList<ModGroupInfo> groupById(QList<ModInfo> modInfoList);
 	void applyChanges();
-	bool exportToModel();
+	void exportToModel();
 	void syncSelection(QModelIndex index);
 	QList<ModInfo> m_modList;
+	QList<ModGroupInfo> m_modGroupList;
 	QDir *modsDir;
 	QDir *dataDir;
 	QStandardItemModel *m_model;
 	void refreshOnCheck(const QModelIndex & topLeft, const QModelIndex & bottomRight);
-	int indexFromArchiveName(QString archiveName);
+	QPair<int, int> groupAndModIndexFromArchiveName(QString archiveName);
+	int indexFromModGroupName(QString groupName);
 	int indexFromFileName(QString fileName, ModInfo modInfo);
 	NexusInterface *nexusInterface;
 	void reset();
@@ -48,6 +51,7 @@ private:
 	QList<QStandardItem *> createFileItems(FileInfo fileInfo);
 	QList<QStandardItem *> createSubmodItems(SubmodInfo submodInfo);
 	QList<QStandardItem *> createModItems(ModInfo modInfo);
+	QList<QStandardItem *> createModGroupItems(ModGroupInfo modGroupInfo);
 	QString calculateCheckSum(QString filePath);
 	bool fileMatched(FileInfo fileInfo);
 	bool layoutChanged;

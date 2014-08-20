@@ -19,13 +19,13 @@ void MainWindow::updateFileView()
 		ui->treeView->setModel(modManager->fileFilter);
 	}
 	QModelIndexList list = ui->modsView->selectionModel()->selectedRows();
-	for(QModelIndex index: list)
-		if(index.parent().isValid())
-			list.removeOne(index);
 
 	if(list.count() == 1)
 	{
-		ui->treeView->setRootIndex(modManager->fileFilter->mapFromSource(modManager->modFilter->mapToSource(list.first())));
+		if(list.first().data(Qt::UserRole+1) == "mgi")
+			ui->treeView->setModel(nullptr);
+		else
+			ui->treeView->setRootIndex(modManager->fileFilter->mapFromSource(modManager->modFilter->mapToSource(list.first())));
 	}
 	else
 	{
@@ -123,7 +123,6 @@ void MainWindow::on_actionChangeMods_triggered()
 	wiz->exec();
 	if(wiz->result() == 1)
 	{
-		QFile::remove(QDir::current().filePath("modlist.txt"));
 		modsPath = wiz->field("mod").toString();
 		modManager->setPaths(skyrimPath, modsPath);
 		pluginManager->setSkyrimPath(skyrimPath);

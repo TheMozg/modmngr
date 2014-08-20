@@ -46,14 +46,14 @@ QList<ModInfo> Archive::list(QStringList mylist)
 			fs << fileInfo << endl;
 	listFile.close();
 	QString exePath = QDir::current().filePath("7za.exe");
+	QFileInfo exeInfo(exePath);
 	QProcess* process = new QProcess();
-	process->setProgram(exePath);
 	process->setStandardOutputFile("list.txt");
-	process->setWorkingDirectory(QDir::current().path());
+	process->setWorkingDirectory(exeInfo.path());
 	process->setNativeArguments("l -slt -an -ai@listfile.txt");
-	process->start();
+	process->start(exePath);
 	process->waitForFinished(-1);
-	//qDebug() << exePath << process->error();
+	//qDebug() << t.elapsed();
 	QFile *file = new QFile("list.txt");
 	file->open(QFile::ReadOnly | QFile::Text);
 	QStringList output;
@@ -61,7 +61,7 @@ QList<ModInfo> Archive::list(QStringList mylist)
 		output.append(file->readLine());
 	file->remove();
 	listFile.remove();
-	//qDebug() << output;
+	//qDebug() << t.elapsed();
 	QList<ModInfo> modInfoList;
 	int i = 3;
 	while(i < output.count())

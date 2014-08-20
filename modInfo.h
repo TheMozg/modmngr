@@ -67,6 +67,8 @@ struct ModGroupInfo
 {
 	QString name;
 	QString version;
+	QString latestVersion;
+	QString nexusID;
 	QList<ModInfo> modList;
 };
 

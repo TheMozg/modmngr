@@ -1,5 +1,4 @@
 #include "modmanager.h"
-#include "bashimportwizardpage.h"
 
 ModManager::ModManager(QObject *parent) :QObject(parent)
 {
@@ -28,54 +27,7 @@ void ModManager::setPaths(QString skyrimPath, QString modsPath)
 	if(QFile::exists(modsPath))
 		modsDir->setPath(modsPath);
 	if(oldMP != modsDir->path())
-	{
 		reload();
-
-		disconnect(modFilter, &SortFilterProxyModel::dataChanged, this, &ModManager::refreshOnCheck);
-		disconnect(modFilter, &SortFilterProxyModel::rowsInserted, this, &ModManager::refreshOnDrop);
-		if(modsDir->dirName().toLower() == "bash installers")
-		{
-			bool ok = exportToModel();
-			if(!ok)
-			{
-				QWizard *wiz = new QWizard(qApp->activeWindow(),Qt::WindowCloseButtonHint|Qt::CustomizeWindowHint);
-				wiz->setWindowTitle("SMM Setup");
-				BashImportWizardPage *importPage = new BashImportWizardPage();
-				importPage->setTitle("It seems you are using Wrye Bash to manage mods");
-				importPage->setSubTitle("SMM thinks you have made some changes in Wrye Bash that are are not yet synced with SMM. If you want to import Wrye Bash mod order, open installers tab, right click on column header and select list packages (both installed and uninstalled), then copy and paste it here.");
-				wiz->addPage(importPage);
-				wiz->exec();
-				if(wiz->result() == QDialog::Accepted)
-				{
-					QList<QPair<QString, bool>> installed = importPage->installed;
-					qDebug() << installed.count();
-					QMutableListIterator<QPair<QString, bool>> i(installed);
-					while (i.hasNext())
-					{
-						if(indexFromArchiveName(i.next().first) == -1)
-							i.remove();
-					}
-
-					qDebug() << installed.count() << m_modList.count();
-					qDebug() << installed;
-					for(int modRow = 0; modRow < installed.count(); modRow++)
-					{
-						int oldModRow = indexFromArchiveName(installed.at(modRow).first);
-						qDebug() << oldModRow << installed.at(modRow).first;
-						ModInfo &modInfo = m_modList[oldModRow];
-						for(SubmodInfo &submodInfo: modInfo.submodList)
-						{
-							submodInfo.isChecked = installed.at(modRow).second;
-						}
-						m_modList.move(oldModRow, modRow);
-					}
-				}
-			}
-		}
-		connect(modFilter, &SortFilterProxyModel::dataChanged, this, &ModManager::refreshOnCheck);
-		connect(modFilter, &SortFilterProxyModel::rowsInserted, this, &ModManager::refreshOnDrop, Qt::QueuedConnection);
-		refreshOnCheck(QModelIndex(), QModelIndex());
-	}
 	if(oldSP != dataDir->path() && oldMP == modsDir->path())
 		refreshOnCheck(QModelIndex(), QModelIndex());
 }
@@ -170,10 +122,11 @@ void ModManager::reload()
 
 		m_modList.append(modInfo);
 	}
+	m_modGroupList = groupById(m_modList);
 	qDebug() <<"loading time" << t.elapsed();
-
 	connect(modFilter, &SortFilterProxyModel::dataChanged, this, &ModManager::refreshOnCheck);
 	connect(modFilter, &SortFilterProxyModel::rowsInserted, this, &ModManager::refreshOnDrop, Qt::QueuedConnection);
+	refreshOnCheck(QModelIndex(), QModelIndex());
 }
 
 QList<QStandardItem *> ModManager::createFileItems(FileInfo fileInfo)
@@ -215,6 +168,25 @@ QList<QStandardItem *> ModManager::createModItems(ModInfo modInfo)
 	list.append(modItem);
 	QStringList textList;
 	textList << "" << "" << "" << modInfo.latestVersion << modInfo.version;
+	for(QString text: textList)
+	{
+		QStandardItem *item = new QStandardItem(text);
+		item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsDragEnabled | Qt::ItemIsEnabled | Qt::ItemNeverHasChildren);
+		list.append(item);
+	}
+	return list;
+}
+
+QList<QStandardItem *> ModManager::createModGroupItems(ModGroupInfo modGroupInfo)
+{
+	QList<QStandardItem *> list;
+	QStandardItem *item = new QStandardItem(modGroupInfo.name);
+	item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsTristate | Qt::ItemIsDragEnabled | Qt::ItemIsUserCheckable | Qt::ItemIsEnabled);
+	item->setCheckState(Qt::Unchecked);
+	item->setColumnCount(6);
+	list.append(item);
+	QStringList textList;
+	textList << "" << "" << "" << modGroupInfo.latestVersion << modGroupInfo.version;
 	for(QString text: textList)
 	{
 		QStandardItem *item = new QStandardItem(text);
@@ -342,24 +314,46 @@ QList<ModInfo> ModManager::loadModInfo(QString filePath)
 
 void ModManager::syncModOrder()
 {
-	for(int modRow = 0; modRow < modFilter->rowCount(); modRow++)
+	for(int modGroupRow = 0; modGroupRow < modFilter->rowCount(); modGroupRow++)
 	{
 		QString name;
 		for(int col = 0; col < modFilter->columnCount(); col++)
 		{
-			if(!modFilter->index(modRow,col).data().toString().isEmpty())
+			if(!modFilter->index(modGroupRow,col).data().toString().isEmpty())
 			{
-				name = modFilter->index(modRow,col).data().toString();
+				name = modFilter->index(modGroupRow,col).data().toString();
 				break;
 			}
 		}
-		int oldModRow = indexFromArchiveName(name);
-		if(oldModRow != modRow && oldModRow != -1)
+		int oldModGroupRow = indexFromModGroupName(name);
+		if(oldModGroupRow != modGroupRow && oldModGroupRow != -1)
 		{
-			ModInfo modInfo = m_modList.takeAt(oldModRow);
-			m_modList.insert(modRow, modInfo);
+			ModGroupInfo modGroupInfo = m_modGroupList.takeAt(oldModGroupRow);
+			m_modGroupList.insert(modGroupRow, modGroupInfo);
 		}
 	}
+}
+
+QList<ModGroupInfo> ModManager::groupById(QList<ModInfo> modInfoList)
+{
+	QHash<QString, ModGroupInfo> hash;
+	for(ModInfo modInfo: modInfoList)
+	{
+		if(hash.contains(modInfo.nexusID))
+		{
+			hash[modInfo.nexusID].version = qMax(hash[modInfo.nexusID].version, modInfo.version);
+			hash[modInfo.nexusID].modList.append(modInfo);
+		}
+		else
+		{
+			ModGroupInfo modGroupInfo;
+			modGroupInfo.name = modInfo.name;
+			modGroupInfo.version = modInfo.version;
+			modGroupInfo.modList.append(modInfo);
+			hash.insert(modInfo.nexusID, modGroupInfo);
+		}
+	}
+	return hash.values();
 }
 
 void ModManager::applyChanges()
@@ -471,34 +465,37 @@ void ModManager::replyFinished(QHash<QString, NexusModInfo> nexusModInfoIDHash)
 	}*/
 }
 
-bool ModManager::exportToModel()
+void ModManager::exportToModel()
 {
 	QTime t(0,0);
 	t.start();
 	m_model->removeRows(0, m_model->rowCount());
 	QStringList installList;
 	QMultiHash<QString, FileInfo> installMap;
-	for(int modRow = m_modList.count()-1; modRow >= 0; modRow--)
+	for(int modGroupRow = m_modGroupList.count()-1; modGroupRow >= 0; modGroupRow--)
 	{
-		ModInfo modInfo = m_modList.at(modRow);
-		for(int submodRow = modInfo.submodList.count()-1; submodRow >= 0; submodRow--)
+		ModGroupInfo modGroupInfo = m_modGroupList.at(modGroupRow);
+		for(int modRow = modGroupInfo.modList.count()-1; modRow >= 0; modRow--)
 		{
-			SubmodInfo submodInfo = modInfo.submodList.at(submodRow);
-			if(submodInfo.isChecked)
+			ModInfo modInfo = modGroupInfo.modList.at(modRow);
+			for(int submodRow = modInfo.submodList.count()-1; submodRow >= 0; submodRow--)
 			{
-				for(FileInfo fileInfo: submodInfo.fileList)
+				SubmodInfo submodInfo = modInfo.submodList.at(submodRow);
+				if(submodInfo.isChecked)
 				{
-					if(!installList.contains(fileInfo.name))
+					for(FileInfo fileInfo: submodInfo.fileList)
 					{
-						installList.append(fileInfo.name);
-						installMap.insert(modInfo.name, fileInfo);
+						if(!installList.contains(fileInfo.name))
+						{
+							installList.append(fileInfo.name);
+							installMap.insert(modInfo.name, fileInfo);
+						}
 					}
 				}
 			}
 		}
 	}
-	//qDebug() << installList;
-	bool ok = true;
+	//qDebug() << "installList";
 	QStringList tagList;
 	tagList << "Matched" << "Matched Conflict" << "Conflict" << "Mismatched" << "Underwritten" << "Dirty" << "Missing";
 	QList<QBrush> colorList;
@@ -507,214 +504,232 @@ bool ModManager::exportToModel()
 	else
 		colorList << QBrush(QColor("#BAD696"))<< QBrush(QColor("#BAD696")) << QBrush(QColor("#EDE3A4"))  << QBrush(Qt::red) << QBrush(Qt::red) << QBrush(Qt::red) << QBrush(Qt::red);
 
-
-	for(int modRow = 0; modRow < m_modList.count(); modRow++)
+	for(int modGroupRow = 0; modGroupRow < m_modGroupList.count(); modGroupRow++)
 	{
-		int ci = -1;
-		ModInfo modInfo = m_modList.at(modRow);
-		QList<QStandardItem *> modItemList = createModItems(modInfo);
-		QStandardItem *modItem = modItemList.first();
-		if(!modInfo.skipList.isEmpty())
+		ModGroupInfo modGroupInfo = m_modGroupList.at(modGroupRow);
+		QList<QStandardItem *> modGroupItemList = createModGroupItems(modGroupInfo);
+		QStandardItem *modGroupItem = modGroupItemList.first();
+		modGroupItem->setData("mgi");
+		bool groupHasCheckedSubmods = false;
+		bool groupHasUncheckedSubmods = false;
+		for(int modRow = 0; modRow < modGroupInfo.modList.count(); modRow++)
 		{
-			QStandardItem *skippedItem = new QStandardItem("Skipped");
-			skippedItem->setData("skipped", Qt::UserRole+1);
-			skippedItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
-			modItem->appendRow(skippedItem);
-			foreach(FileInfo fileInfo, modInfo.skipList)
+			int ci = -1;
+			ModInfo modInfo = modGroupInfo.modList.at(modRow);
+			QList<QStandardItem *> modItemList = createModItems(modInfo);
+			QStandardItem *modItem = modItemList.first();
+			modItem->setData("mi");
+			if(!modInfo.skipList.isEmpty())
 			{
-				QList<QStandardItem *> fileItems = createFileItems(fileInfo);
-				skippedItem->appendRow(fileItems);
-			}
-		}
-
-		bool hasChecked = false;
-		bool hasUnchecked = false;
-		for(int submodRow = modInfo.submodList.count()-1; submodRow >= 0; submodRow--)
-		{
-			SubmodInfo submodInfo = modInfo.submodList.at(submodRow);
-			QList<QStandardItem *> submodItems = createSubmodItems(submodInfo);
-			QStandardItem* submodItem = submodItems.first();
-			submodItem->setData("submod");
-			modItem->insertRow(0, submodItems);
-			if(submodInfo.isChecked)
-			{
-				hasChecked = true;
-				submodItem->setCheckState(Qt::Checked);
-			}
-			else
-			{
-				hasUnchecked = true;
-				submodItem->setCheckState(Qt::Unchecked);
-			}
-			if(modInfo.submodList.count() == 1)
-				submodItem->setData(true, Qt::UserRole+2);
-			foreach(FileInfo fileInfo, submodInfo.fileList)
-			{
-				QString group;
-				QString secondGroup;
-				bool checkSumOk = false;
-				for(FileInfo curFileInfo: installMap.values(modInfo.name))
-					if(curFileInfo.name == fileInfo.name && curFileInfo.checkSum == fileInfo.checkSum)
-					{
-						checkSumOk = true;
-						break;
-					}
-				if(checkSumOk)
+				QStandardItem *skippedItem = new QStandardItem("Skipped");
+				skippedItem->setData("skipped", Qt::UserRole+1);
+				skippedItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+				modItem->appendRow(skippedItem);
+				foreach(FileInfo fileInfo, modInfo.skipList)
 				{
-					if(QFile::exists(dataDir->filePath(fileInfo.name)))
-						if(fileMatched(fileInfo))
-							group = "Matched";
-						else
-							group = "Mismatched";
-					else
-						group = "Missing";
+					QList<QStandardItem *> fileItems = createFileItems(fileInfo);
+					skippedItem->appendRow(fileItems);
+				}
+			}
+
+			bool ModHasCheckedSubmods = false;
+			bool ModHasUncheckedSubmods = false;
+			for(int submodRow = modInfo.submodList.count()-1; submodRow >= 0; submodRow--)
+			{
+				SubmodInfo submodInfo = modInfo.submodList.at(submodRow);
+				QList<QStandardItem *> submodItems = createSubmodItems(submodInfo);
+				QStandardItem* submodItem = submodItems.first();
+				submodItem->setData("submod");
+				modItem->insertRow(0, submodItems);
+				if(submodInfo.isChecked)
+				{
+					ModHasCheckedSubmods = true;
+					groupHasCheckedSubmods = true;
+					submodItem->setCheckState(Qt::Checked);
 				}
 				else
 				{
-					int markedModRow = -1;
-					bool markedMatched = false;
-					QHashIterator<QString, FileInfo> iter(installMap);
-					while(iter.hasNext())
-					{
-						iter.next();
-						if(iter.value().name == fileInfo.name)
+					groupHasUncheckedSubmods = true;
+					ModHasUncheckedSubmods = true;
+					submodItem->setCheckState(Qt::Unchecked);
+				}
+				if(modInfo.submodList.count() == 1)
+					submodItem->setData(true, Qt::UserRole+2);
+				foreach(FileInfo fileInfo, submodInfo.fileList)
+				{
+					QString group;
+					QString secondGroup;
+					bool checkSumOk = false;
+					for(FileInfo curFileInfo: installMap.values(modInfo.name))
+						if(curFileInfo.name == fileInfo.name && curFileInfo.checkSum == fileInfo.checkSum)
 						{
-							markedModRow = indexFromArchiveName(iter.key());
-							markedMatched = fileMatched(iter.value());
+							checkSumOk = true;
+							break;
 						}
-					}
-
-					if(modRow == markedModRow)
+					if(checkSumOk)
 					{
 						if(QFile::exists(dataDir->filePath(fileInfo.name)))
 							if(fileMatched(fileInfo))
-								if(markedMatched)
-									group = "Matched";
-								else
-									group = "Underwritten";
+								group = "Matched";
 							else
-								if(markedMatched)
-									if(m_modList.at(modRow).submodList.at(submodRow).isChecked)
-										group = "Internal Conflict";
-									else
-										group = "Inactive Internal Conflict";
-								else
-									group = "Mismatched";
+								group = "Mismatched";
 						else
 							group = "Missing";
 					}
-
-					if(modRow > markedModRow)
+					else
 					{
-						if(QFile::exists(dataDir->filePath(fileInfo.name)))
-							if(fileMatched(fileInfo))
-								if(markedModRow == -1)
-									group = "Dirty";
+						int markedModGroupRow = -1;
+						int markedModRow = -1;
+						bool markedMatched = false;
+						QHashIterator<QString, FileInfo> iter(installMap);
+						while(iter.hasNext())
+						{
+							iter.next();
+							if(iter.value().name == fileInfo.name)
+							{
+								QPair<int, int> pair = groupAndModIndexFromArchiveName(iter.key());
+								markedModGroupRow = pair.first;
+								markedModRow = pair.second;
+								markedMatched = fileMatched(iter.value());
+							}
+						}
+						if(modGroupRow == markedModGroupRow && modRow == markedModRow)
+						{
+							if(QFile::exists(dataDir->filePath(fileInfo.name)))
+								if(fileMatched(fileInfo))
+									if(markedMatched)
+										group = "Matched";
+									else
+										group = "Underwritten";
 								else
-								{
-									group = "Matched Conflict";
-									secondGroup = m_modList.at(markedModRow).name;
-								}
+									if(markedMatched)
+										if(m_modGroupList.at(modGroupRow).modList.at(modRow).submodList.at(submodRow).isChecked)
+											group = "Internal Conflict";
+										else
+											group = "Inactive Internal Conflict";
+									else
+										group = "Mismatched";
 							else
-								if(markedModRow == -1)
-									group = "Mismatched";
-								else
-								{
-									group = "Inactive Conflict";
-									secondGroup = m_modList.at(markedModRow).name;
-								}
-						else
-							group = "Not Installed";
-					}
-
-					if(modRow < markedModRow)
-					{
-						if(QFile::exists(dataDir->filePath(fileInfo.name)))
-							if(fileMatched(fileInfo))
-								if(markedMatched)
-								{
-									group = "Matched Conflict";
-									secondGroup = m_modList.at(markedModRow).name;
-								}
-								else
-									group = "Underwritten";
-							else
-								if(markedMatched)
-									if(!m_modList.at(modRow).submodList.at(submodRow).isChecked)
-									{
-										group = "Inactive Conflict";
-										secondGroup = m_modList.at(markedModRow).name;
-									}
+								group = "Missing";
+						}
+						if(modGroupRow > markedModGroupRow || (modGroupRow == markedModGroupRow && modRow > markedModRow))
+						{
+							if(QFile::exists(dataDir->filePath(fileInfo.name)))
+								if(fileMatched(fileInfo))
+									if(markedModGroupRow == -1)
+										group = "Dirty";
 									else
 									{
-										group = "Conflict";
-										secondGroup = m_modList.at(markedModRow).name;
+										group = "Matched Conflict";
+										secondGroup = m_modGroupList.at(markedModGroupRow).modList.at(markedModRow).name;
 									}
 								else
-									group = "Mismatched";
-						else
-							group = "Not Installed";
+									if(markedModGroupRow == -1)
+										group = "Mismatched";
+									else
+									{
+										group = "Inactive Conflict";
+										secondGroup = m_modGroupList.at(markedModGroupRow).modList.at(markedModRow).name;
+									}
+							else
+								group = "Not Installed";
+						}
+						if(modGroupRow < markedModGroupRow || (modGroupRow == markedModGroupRow && modRow < markedModRow))
+						{
+							if(QFile::exists(dataDir->filePath(fileInfo.name)))
+								if(fileMatched(fileInfo))
+									if(markedMatched)
+									{
+										group = "Matched Conflict";
+										secondGroup = m_modGroupList.at(markedModGroupRow).modList.at(markedModRow).name;
+									}
+									else
+										group = "Underwritten";
+								else
+									if(markedMatched)
+										if(!m_modGroupList.at(modGroupRow).modList.at(modRow).submodList.at(submodRow).isChecked)
+										{
+											group = "Inactive Conflict";
+											secondGroup = m_modGroupList.at(markedModGroupRow).modList.at(markedModRow).name;
+										}
+										else
+										{
+											group = "Conflict";
+											secondGroup = m_modGroupList.at(markedModGroupRow).modList.at(markedModRow).name;
+										}
+									else
+										group = "Mismatched";
+							else
+								group = "Not Installed";
+						}
 					}
-
-				}
-				if(tagList.contains(group))
-					ci = qMax(ci, tagList.indexOf(group));
-				QList<QStandardItem *> fileItems = createFileItems(fileInfo);
-				fileItems.at(3)->setText(submodInfo.name);
-				QStandardItem *groupItem = nullptr;
-				for(int groupRow = 0; groupRow < modItem->rowCount(); groupRow++)
-				{
-					if(modItem->child(groupRow)->text() == group)
-						groupItem = modItem->child(groupRow);
-				}
-				if(groupItem == nullptr)
-				{
-					groupItem = new QStandardItem(group);
-					groupItem->setData("fileOrGroup", Qt::UserRole+1);
-					groupItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
-					modItem->appendRow(groupItem);
-				}
-				if(secondGroup.isEmpty())
-					groupItem->appendRow(fileItems);
-				else
-				{
-					QStandardItem *secGroupItem = nullptr;
-					for(int groupRow = 0; groupRow < groupItem->rowCount(); groupRow++)
+					if(tagList.contains(group))
+						ci = qMax(ci, tagList.indexOf(group));
+					QList<QStandardItem *> fileItems = createFileItems(fileInfo);
+					fileItems.at(3)->setText(submodInfo.name);
+					QStandardItem *groupItem = nullptr;
+					for(int groupRow = 0; groupRow < modItem->rowCount(); groupRow++)
 					{
-						if(groupItem->child(groupRow)->text() == secondGroup)
-							secGroupItem = groupItem->child(groupRow);
+						if(modItem->child(groupRow)->text() == group)
+							groupItem = modItem->child(groupRow);
 					}
-					if(secGroupItem == nullptr)
+					if(groupItem == nullptr)
 					{
-						secGroupItem = new QStandardItem(secondGroup);
-						secGroupItem->setData("fileOrGroup", Qt::UserRole+1);
-						secGroupItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
-						groupItem->appendRow(secGroupItem);
+						groupItem = new QStandardItem(group);
+						groupItem->setData("fileOrGroup", Qt::UserRole+1);
+						groupItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+						modItem->appendRow(groupItem);
 					}
-					secGroupItem->appendRow(fileItems);
+					if(secondGroup.isEmpty())
+						groupItem->appendRow(fileItems);
+					else
+					{
+						QStandardItem *secGroupItem = nullptr;
+						for(int groupRow = 0; groupRow < groupItem->rowCount(); groupRow++)
+						{
+							if(groupItem->child(groupRow)->text() == secondGroup)
+								secGroupItem = groupItem->child(groupRow);
+						}
+						if(secGroupItem == nullptr)
+						{
+							secGroupItem = new QStandardItem(secondGroup);
+							secGroupItem->setData("fileOrGroup", Qt::UserRole+1);
+							secGroupItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+							groupItem->appendRow(secGroupItem);
+						}
+						secGroupItem->appendRow(fileItems);
+					}
 				}
 			}
+			if(ModHasCheckedSubmods && !ModHasUncheckedSubmods)
+				modItem->setCheckState(Qt::Checked);
+			if(!ModHasCheckedSubmods && ModHasUncheckedSubmods)
+				modItem->setCheckState(Qt::Unchecked);
+			if(ModHasCheckedSubmods && ModHasUncheckedSubmods)
+				modItem->setCheckState(Qt::PartiallyChecked);
+			if(ci != -1)
+			{
+				for(QStandardItem *item: modItemList)
+					item->setBackground(colorList.at(ci));
+			}
+			if(modGroupInfo.modList.count() > 1)
+				modGroupItem->appendRow(modItemList);
+			else
+				m_model->appendRow(modItemList);
 		}
-
-		if(hasChecked && !hasUnchecked)
-			modItem->setCheckState(Qt::Checked);
-		if(!hasChecked && hasUnchecked)
-			modItem->setCheckState(Qt::Unchecked);
-		if(hasChecked && hasUnchecked)
-			modItem->setCheckState(Qt::PartiallyChecked);
-		if(ci != -1)
+		if(modGroupInfo.modList.count() > 1)
 		{
-			qDebug() << ci;
-			if(ci >= 3)
-				ok = false;
-			for(QStandardItem *item: modItemList)
-				item->setBackground(colorList.at(ci));
+			if(groupHasCheckedSubmods && !groupHasUncheckedSubmods)
+				modGroupItem->setCheckState(Qt::Checked);
+			if(!groupHasCheckedSubmods && groupHasUncheckedSubmods)
+				modGroupItem->setCheckState(Qt::Unchecked);
+			if(groupHasCheckedSubmods && groupHasUncheckedSubmods)
+				modGroupItem->setCheckState(Qt::PartiallyChecked);
+			m_model->appendRow(modGroupItemList);
 		}
-		m_model->appendRow(modItemList);
 	}
 	qDebug() << "export time" << t.elapsed();
 	emit finishedExporting();
-	return ok;
 }
 
 void ModManager::syncSelection(QModelIndex index)
@@ -723,25 +738,48 @@ void ModManager::syncSelection(QModelIndex index)
 	if(!index.isValid())
 		return;
 	QStandardItem* item = m_model->itemFromIndex(modFilter->mapToSource(index));
+	bool isChecked = item->checkState() == Qt::PartiallyChecked || item->checkState() == Qt::Checked;
 	qDebug() << "sync item is" << item->text();
-	if(index.parent().isValid())
+	if(index.data(Qt::UserRole+1).toString() == "mgi")
 	{
-		ModInfo &modInfo = m_modList[indexFromArchiveName(item->parent()->text())];
-		SubmodInfo &submodInfo = modInfo.submodList[indexFromFileName(item->text(), modInfo)];
-		if(item->checkState() == Qt::Checked)
-			submodInfo.isChecked = true;
-		else
-			submodInfo.isChecked = false;
-	}
-	else
-	{
-		bool isChecked = item->checkState() == Qt::PartiallyChecked || item->checkState() == Qt::Checked;
-		ModInfo &modInfo = m_modList[indexFromArchiveName(item->text())];
-		QMutableListIterator<SubmodInfo> i(modInfo.submodList);
-		while(i.hasNext())
+		ModGroupInfo &modGroupInfo = m_modGroupList[index.row()];
+		for(ModInfo &modInfo: modGroupInfo.modList)
 		{
-			SubmodInfo &submodInfo = i.next();
-			submodInfo.isChecked = isChecked;
+			for(SubmodInfo &submodInfo: modInfo.submodList)
+			{
+				submodInfo.isChecked = isChecked;
+			}
+		}
+	}
+	if(index.data(Qt::UserRole+1).toString() == "mi")
+	{
+		if(index.parent().isValid())
+		{
+			ModGroupInfo &modGroupInfo = m_modGroupList[index.parent().row()];
+			for(SubmodInfo &submodInfo: modGroupInfo.modList[index.row()].submodList)
+			{
+				submodInfo.isChecked = isChecked;
+			}
+		}
+		else
+		{
+			for(SubmodInfo &submodInfo: m_modGroupList[index.row()].modList[0].submodList)
+			{
+				submodInfo.isChecked = isChecked;
+			}
+		}
+	}
+	if(index.data(Qt::UserRole+1).toString() != "mi" && index.data(Qt::UserRole+1).toString() != "mgi")
+	{
+		QModelIndex mi = index.parent();
+		if(mi.parent().isValid())
+		{
+			ModGroupInfo &modGroupInfo = m_modGroupList[mi.parent().row()];
+			modGroupInfo.modList[mi.row()].submodList[index.row()].isChecked = isChecked;
+		}
+		else
+		{
+			m_modGroupList[index.row()].modList[0].submodList[index.row()].isChecked = isChecked;
 		}
 	}
 }
@@ -755,19 +793,34 @@ void ModManager::refreshOnCheck(const QModelIndex &topLeft, const QModelIndex &b
 	disconnect(modFilter, &SortFilterProxyModel::dataChanged, this, &ModManager::refreshOnCheck);
 	disconnect(modFilter, &SortFilterProxyModel::rowsInserted, this, &ModManager::refreshOnDrop);
 
-	syncSelection(topLeft);
-	applyChanges();
-	exportToModel();
+	//syncSelection(topLeft);
+	//applyChanges();
+	//exportToModel();
 
 	connect(modFilter, &SortFilterProxyModel::dataChanged, this, &ModManager::refreshOnCheck);
 	connect(modFilter, &SortFilterProxyModel::rowsInserted, this, &ModManager::refreshOnDrop, Qt::QueuedConnection);
 }
 
-int ModManager::indexFromArchiveName(QString archiveName)
+QPair<int, int> ModManager::groupAndModIndexFromArchiveName(QString archiveName)
 {
-	for(int i = 0; i < m_modList.count(); i++)
-		if(m_modList.at(i).name == archiveName)
-			return i;
+	for(int modGroupRow = 0; modGroupRow < m_modGroupList.count(); modGroupRow++)
+	{
+		for(int modRow = 0; modRow < m_modGroupList.at(modGroupRow).modList.count(); modRow++)
+		{
+			if(m_modGroupList.at(modGroupRow).modList.at(modRow).name == archiveName)
+				return qMakePair(modGroupRow, modRow);
+		}
+
+	}
+	//qDebug() << "ERRORan" << archiveName;
+	return qMakePair(-1, -1);
+}
+
+int ModManager::indexFromModGroupName(QString groupName)
+{
+	for(int modGroupRow = 0; modGroupRow < m_modGroupList.count(); modGroupRow++)
+		if(m_modGroupList.at(modGroupRow).name == groupName)
+			return modGroupRow;
 	//qDebug() << "ERRORan" << archiveName;
 	return -1;
 }

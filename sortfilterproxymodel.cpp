@@ -8,16 +8,15 @@ SortFilterProxyModel::SortFilterProxyModel(bool acceptMods)
 
 bool SortFilterProxyModel::filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const
 {
+	if(sourceParent.child(sourceRow,0).data(Qt::UserRole+1).toString() == "mi")
+		return true;
 	if(sourceParent.isValid())
 	{
-		bool isSubmod = sourceParent.child(sourceRow,0).data(Qt::UserRole+1).toString() == "submod";
 		if(m_acceptSubmods)
-			if(isSubmod)
-				return !sourceParent.child(sourceRow,0).data(Qt::UserRole+2).toBool();
-			else
-				return false;
+			return sourceParent.child(sourceRow,0).flags().testFlag(Qt::ItemIsUserCheckable) &&
+					!sourceParent.child(sourceRow,0).data(Qt::UserRole+2).toBool();
 		else
-			return !isSubmod;
+			return !sourceParent.child(sourceRow,0).flags().testFlag(Qt::ItemIsUserCheckable);
 	}
 	else
 	{
